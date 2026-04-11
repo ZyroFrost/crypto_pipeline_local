@@ -1,0 +1,117 @@
+# docker-compose.yml: Build DockerFile first before running docker-compose up
+
+# This file defines the services for the Airflow application using Docker Compose.
+# Create a Docker image named 'crypto-airflow' using the Dockerfile in the current directory.
+# The Airflow service will mount the local 'airflow/dags' directory to the container's '/opt/airflow/dags' directory.
+# The Airflow service will listen on port 8080 and run in standalone mode.
+version: '3.8' # Đã nâng lên 3.8 để hỗ trợ depends_on condition
+
+services:
+  # THÊM MỚI: Database trung tâm cho Airflow
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # THÊM MỚI: Khởi tạo Database và tạo Admin (chạy 1 lần rồi tắt)
+  airflow-init:
+    build: .
+    image: crypto-airflow:latest
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - _AIRFLOW_DB_UPGRADE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=zyro9579
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: version
+
+  crypto-airflow: # Service name for the Airflow application
+    build: . # Build the Docker image using the Dockerfile in the current directory (from folder)
+    image: crypto-airflow:latest # Build image name in Dockerfile
+    env_file: # Load environment variables from .env file
+      - .env
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=zyro9579
+      # THÊM MỚI: Báo cho Webserver biết phải dùng Postgres
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      # THÊM MỚI: Đưa file JSON vào container để Airflow có thể sử dụng credentials của Google Cloud
+      - AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT=google-cloud-platform://?key_path=/opt/airflow/service-account.json
+      - AIRFLOW__WEBSERVER__SECRET_KEY=zyro_secret_key_fixed_123
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+        
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags # Mount local DAGs directory to container
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data # Mount local DATA directory to container
+      - ./airflow/service-account.json:/opt/airflow/service-account.json # Đưa file JSON vào container để Airflow có thể sử dụng credentials của Google Cloud
+      # ./airflow/dags (outside container, local pc) -> /opt/airflow/dags (inside container)
+
+    ports:
+      - "80:8080" # Check port: netstat -ano | findstr :8080 (if LISTENING, port is in use, if nothing shows, port is free)
+    command: airflow webserver # Service này chỉ lo hiển thị giao diện
+
+    # THÊM MỚI: Hạn chế file Docker log để không tràn RAM/Disk
+    logging: 
+      driver: "json-file"
+      options:
+        max-size: "50m"  # Tối đa 50MB một file log
+        max-file: "5"    # Giữ tối đa 5 file gần nhất
+
+  airflow-scheduler:
+    image: crypto-airflow:latest
+    env_file:
+      - .env
+    environment:
+      # THÊM MỚI: Báo cho Scheduler biết phải dùng Postgres
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      # THÊM MỚI: Scheduler cũng cần connection để chạy Task upload
+      - AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT=google-cloud-platform://?key_path=/opt/airflow/service-account.json
+      - AIRFLOW__WEBSERVER__SECRET_KEY=zyro_secret_key_fixed_123
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+      # THÊM MỚI: Đưa file JSON vào container
+      - ./airflow/service-account.json:/opt/airflow/service-account.json # Đưa file JSON vào container để Airflow có thể sử dụng credentials của Google Cloud, nằm ở airflow
+    command: airflow scheduler # Service này đóng vai trò "bộ não" tự động chạy lịch
+    
+    # THÊM MỚI: Hạn chế file Docker log để không tràn RAM/Disk
+    logging: 
+      driver: "json-file"
+      options:
+        max-size: "50m"  # Tối đa 50MB một file log
+        max-file: "5"    # Giữ tối đa 5 file gần nhất
+
+# THÊM MỚI: Khai báo volume cho Postgres
+volumes:
+  postgres-db-volume:
+
+# To check file: dirX
+# To run the application, use the command: docker-compose up / docker-compose up -d (to run in detached mode, chạy ngầm ko chiếm terminal)
+# To stop the application, use the command: docker-compose down

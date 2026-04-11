@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual env
+.venv/
+venv/
+
+# Env file
+.env
+
+# Airflow logs
+logs/
+
+# Data (raw file JSON)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Docker
+*.log
+
+# Note
+note/
+
+# Service account file
+service-account.json
